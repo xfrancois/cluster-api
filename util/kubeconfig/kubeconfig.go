@@ -44,6 +44,16 @@ var (
 	ErrDependentCertificateNotFound = errors.New("could not find secret ca")
 )
 
+type ConfigOption func(*api.Cluster)
+
+func WithProxyURL(proxyURL string) ConfigOption {
+	return func(c *api.Cluster) {
+		if proxyURL != "" {
+			c.ProxyURL = proxyURL
+		}
+	}
+}
+
 // FromSecret fetches the Kubeconfig for a Cluster.
 func FromSecret(ctx context.Context, c client.Reader, cluster client.ObjectKey) ([]byte, error) {
 	out, err := secret.Get(ctx, c, cluster, secret.Kubeconfig)
@@ -54,7 +64,7 @@ func FromSecret(ctx context.Context, c client.Reader, cluster client.ObjectKey) 
 }
 
 // New creates a new Kubeconfig using the cluster name and specified endpoint.
-func New(clusterName, endpoint string, caCert *x509.Certificate, caKey crypto.Signer) (*api.Config, error) {
+func New(clusterName, endpoint string, caCert *x509.Certificate, caKey crypto.Signer, options ...ConfigOption) (*api.Config, error) {
 	cfg := &certs.Config{
 		CommonName:   "kubernetes-admin",
 		Organization: []string{"system:masters"},
@@ -74,12 +84,19 @@ func New(clusterName, endpoint string, caCert *x509.Certificate, caKey crypto.Si
 	userName := fmt.Sprintf("%s-admin", clusterName)
 	contextName := fmt.Sprintf("%s@%s", userName, clusterName)
 
+	clusterConfig := &api.Cluster{
+		Server:                   endpoint,
+		CertificateAuthorityData: certs.EncodeCertPEM(caCert),
+	}
+
+	// Apply options
+	for _, opt := range options {
+		opt(clusterConfig)
+	}
+
 	return &api.Config{
 		Clusters: map[string]*api.Cluster{
-			clusterName: {
-				Server:                   endpoint,
-				CertificateAuthorityData: certs.EncodeCertPEM(caCert),
-			},
+			clusterName: clusterConfig,
 		},
 		Contexts: map[string]*api.Context{
 			contextName: {
@@ -206,6 +223,12 @@ func RegenerateSecret(ctx context.Context, c client.Client, configSecret *corev1
 }
 
 func generateKubeconfig(ctx context.Context, c client.Client, clusterName client.ObjectKey, endpoint string) ([]byte, error) {
+	// Récupérer le cluster pour accéder au ProxyURL
+	cluster := &clusterv1.Cluster{}
+	if err := c.Get(ctx, clusterName, cluster); err != nil {
+		return nil, err
+	}
+
 	clusterCA, err := secret.GetFromNamespacedName(ctx, c, clusterName, secret.ClusterCA)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -228,7 +251,7 @@ func generateKubeconfig(ctx context.Context, c client.Client, clusterName client
 		return nil, errors.New("CA private key not found")
 	}
 
-	cfg, err := New(clusterName.Name, endpoint, cert, key)
+	cfg, err := New(clusterName.Name, endpoint, cert, key, WithProxyURL(cluster.Spec.ControlPlaneEndpoint.ProxyURL))
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to generate a kubeconfig")
 	}
