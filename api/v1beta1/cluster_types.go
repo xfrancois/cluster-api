@@ -1014,6 +1014,10 @@ type APIEndpoint struct {
 
 	// port is the port on which the API server is serving.
 	Port int32 `json:"port"`
+
+	// ProxyURL is the URL to use for proxying cluster connections
+	// +optional
+	ProxyURL string `json:"proxyURL,omitempty"`
 }
 
 // IsZero returns true if both host and port are zero values.
