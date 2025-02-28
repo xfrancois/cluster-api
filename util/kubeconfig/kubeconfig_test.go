@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"net/http"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta2"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/certs"
 	"sigs.k8s.io/cluster-api/util/secret"
@@ -48,6 +49,7 @@ clusters:
 - cluster:
     certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUN5RENDQWJDZ0F3SUJBZ0lCQURBTkJna3Foa2lHOXcwQkFRc0ZBREFWTVJNd0VRWURWUVFERXdwcmRXSmwKY201bGRHVnpNQjRYRFRFNU1ERXhNREU0TURBME1Gb1hEVEk1TURFd056RTRNREEwTUZvd0ZURVRNQkVHQTFVRQpBeE1LYTNWaVpYSnVaWFJsY3pDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDQVFvQ2dnRUJBT1EvCmVndmViNk1qMHkzM3hSbGFjczd6OXE4QTNDajcrdnRrZ0pUSjRUSVB4TldRTEd0Q0dmL0xadzlHMW9zNmRKUHgKZFhDNmkwaHA5czJuT0Y2VjQvREUrYUNTTU45VDYzckdWb2s0TkcwSlJPYmlRWEtNY1VQakpiYm9PTXF2R2lLaAoyMGlFY0h5K3B4WkZOb3FzdnlaRGM5L2dRSHJVR1FPNXp6TDNHZGhFL0k1Nkczek9JaWhhbFRHSTNaakRRS05CCmVFV3FONTVDcHZzT3I1b0ZnTmZZTXk2YzZ4WXlUTlhWSUkwNFN0Z2xBbUk4bzZWaTNUVEJhZ1BWaldIVnRha1EKU2w3VGZtVUlIdndKZUo3b2hxbXArVThvaGVTQUIraHZSbDIrVHE5NURTemtKcmRjNmphcyswd2FWaEJydEh1agpWMU15NlNvV2VVUlkrdW5VVFgwQ0F3RUFBYU1qTUNFd0RnWURWUjBQQVFIL0JBUURBZ0trTUE4R0ExVWRFd0VCCi93UUZNQU1CQWY4d0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFIT2thSXNsd0pCOE5PaENUZkF4UWlnaUc1bEMKQlo0LytGeHZ3Y1pnWGhlL0IyUWo1UURMNWlRUU1VL2NqQ0tyYUxkTFFqM1o1aHA1dzY0K2NWRUg3Vm9PSTFCaQowMm13YTc4eWo4aDNzQ2lLQXJiU21kKzNld1QrdlNpWFMzWk9EYWRHVVRRa1BnUHB0THlaMlRGakF0SW43WjcyCmpnYlVnT2FXaklKbnlwRVJ5UmlSKzBvWlk4SUlmWWFsTHUwVXlXcmkwaVhNRmZqQUQ1UVNURy8zRGN5djhEN1UKZHBxU2l5ekJkZVRjSExyenpEbktBeXhQWWgvcWpKZ0tRdEdIakhjY0FCSE1URlFtRy9Ea1pNTnZWL2FZSnMrKwp0aVJCbHExSFhlQ0d4aExFcGdQcGxVb3IrWmVYTGF2WUo0Z2dMVmIweGl2QTF2RUtyaUUwak1Wd2lQaz0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
     server: https://test-cluster-api:6443
+    proxy-url: http://test-proxy:3128
   name: test1
 contexts:
 - context:
@@ -130,6 +132,7 @@ func TestNew(t *testing.T) {
 	testCases := []struct {
 		cluster        string
 		endpoint       string
+		proxyURL       string
 		expectedConfig api.Config
 		expectError    bool
 	}{
@@ -161,7 +164,7 @@ func TestNew(t *testing.T) {
 		caCert, err := getTestCACert(caKey)
 		g.Expect(err).ToNot(HaveOccurred())
 
-		actualConfig, actualError := New(tc.cluster, tc.endpoint, caCert, caKey)
+		actualConfig, actualError := New(tc.cluster, tc.endpoint, tc.proxyURL, caCert, caKey)
 		if tc.expectError {
 			g.Expect(actualError).To(HaveOccurred())
 			continue
@@ -229,6 +232,76 @@ func TestGenerateSecret(t *testing.T) {
 	g.Expect(kubeconfigSecret).To(Equal(expectedSecret))
 }
 
+func TestCreateSecretWithProxy(t *testing.T) {
+    g := NewWithT(t)
+
+    caKey, err := certs.NewPrivateKey()
+    g.Expect(err).ToNot(HaveOccurred())
+
+    caCert, err := getTestCACert(caKey)
+    g.Expect(err).ToNot(HaveOccurred())
+
+    caSecret := &corev1.Secret{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      "test1-ca",
+            Namespace: "test",
+        },
+        Data: map[string][]byte{
+            secret.TLSKeyDataName: certs.EncodePrivateKeyPEM(caKey),
+            secret.TLSCrtDataName: certs.EncodeCertPEM(caCert),
+        },
+    }
+
+    c := fake.NewClientBuilder().WithObjects(caSecret).Build()
+
+    cluster := &clusterv1.Cluster{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:      "test1",
+            Namespace: "test",
+        },
+        Spec: clusterv1.ClusterSpec{
+            ControlPlaneEndpoint: clusterv1.APIEndpoint{
+                Host:     "localhost",
+                Port:     8443,
+                ProxyURL: "http://test-proxy:3128",
+            },
+        },
+    }
+
+    err = CreateSecret(
+        ctx,
+        c,
+        cluster,
+    )
+
+    g.Expect(err).ToNot(HaveOccurred())
+
+    s := &corev1.Secret{}
+    key := client.ObjectKey{Name: "test1-kubeconfig", Namespace: "test"}
+    g.Expect(c.Get(ctx, key, s)).To(Succeed())
+    g.Expect(s.OwnerReferences).To(ContainElement(
+        metav1.OwnerReference{
+            Name:       cluster.Name,
+            Kind:       "Cluster",
+            APIVersion: clusterv1.GroupVersion.String(),
+        },
+    ))
+    g.Expect(s.Type).To(Equal(clusterv1.ClusterSecretType))
+
+    clientConfig, err := clientcmd.NewClientConfigFromBytes(s.Data[secret.KubeconfigDataName])
+    g.Expect(err).ToNot(HaveOccurred())
+    restClient, err := clientConfig.ClientConfig()
+    g.Expect(err).ToNot(HaveOccurred())
+    g.Expect(restClient.CAData).To(Equal(certs.EncodeCertPEM(caCert)))
+    g.Expect(restClient.Host).To(Equal("https://localhost:8443"))
+
+	proxyURL, err := restClient.Proxy(&http.Request{})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(proxyURL.String()).To(Equal("http://test-proxy:3128"))
+}
+
+
+
 func TestCreateSecretWithOwner(t *testing.T) {
 	g := NewWithT(t)
 
@@ -265,6 +338,7 @@ func TestCreateSecretWithOwner(t *testing.T) {
 			Namespace: "test",
 		},
 		"localhost:6443",
+		"",
 		owner,
 	)
 
@@ -320,6 +394,7 @@ func TestCreateSecretWithOwnerHasEndpointPrefixIsSlush(t *testing.T) {
 			Namespace: "test",
 		},
 		"/localhost:6443",
+		"",
 		owner,
 	)
 
@@ -410,7 +485,7 @@ func TestNeedsClientCertRotation(t *testing.T) {
 	caCert, err := getTestCACert(caKey)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	config, err := New("foo", "https://127:0.0.1:4003", caCert, caKey)
+	config, err := New("foo", "https://127:0.0.1:4003", "", caCert, caKey)
 	g.Expect(err).ToNot(HaveOccurred())
 
 	out, err := clientcmd.Write(*config)
@@ -457,6 +532,7 @@ func TestRegenerateClientCerts(t *testing.T) {
 	c := fake.NewClientBuilder().WithObjects(validSecret, caSecret).Build()
 
 	oldConfig, err := clientcmd.Load(validSecret.Data[secret.KubeconfigDataName])
+
 	g.Expect(err).ToNot(HaveOccurred())
 	oldCert, err := certs.DecodeCertPEM(oldConfig.AuthInfos["test1-admin"].ClientCertificateData)
 	g.Expect(err).ToNot(HaveOccurred())

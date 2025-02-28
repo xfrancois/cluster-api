@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1beta1
+package v1beta2
 
 import (
 	"cmp"
@@ -1015,6 +1015,9 @@ type APIEndpoint struct {
 	// port is the port on which the API server is serving.
 	Port int32 `json:"port"`
 
+	// ProxyURL is the URL to use for proxying cluster connections
+	// +optional
+	ProxyURL string `json:"proxyURL,omitempty"`
 }
 
 // IsZero returns true if both host and port are zero values.

@@ -74,6 +74,7 @@ func (r *KubeadmControlPlaneReconciler) reconcileKubeconfig(ctx context.Context,
 			r.SecretCachingClient,
 			clusterName,
 			endpoint.String(),
+			endpoint.ProxyURL,
 			controllerOwnerRef,
 		)
 		if errors.Is(createErr, kubeconfig.ErrDependentCertificateNotFound) {
